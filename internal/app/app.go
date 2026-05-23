@@ -367,6 +367,8 @@ func (a *App) handleBrowserKey(msg tea.KeyPressMsg) tea.Cmd {
 		return a.confirmDelete()
 	case "n":
 		return a.promptRename()
+	case "m":
+		return a.promptMakeDirectory()
 	case "g":
 		return a.promptGoTo()
 	case "/":
@@ -800,6 +802,49 @@ func (a *App) promptRename() tea.Cmd {
 	return nil
 }
 
+func (a *App) promptMakeDirectory() tea.Cmd {
+	pane := a.activePane()
+	a.screen = screenPrompt
+	a.prompt = promptState{
+		title: "Create " + strings.ToLower(pane.title) + " directory",
+		label: "directory name or path",
+		done: func(app *App, value string) tea.Cmd {
+			if value == "" {
+				return nil
+			}
+			active := app.active
+			localPath := localDirectoryTarget(app.local.path, value)
+			remotePath := remoteDirectoryTarget(app.remote.path, value)
+			app.busy = true
+			if active == paneLocal {
+				app.status = "Creating local directory..."
+			} else {
+				app.status = "Creating server directory..."
+			}
+			return func() tea.Msg {
+				if active == paneLocal {
+					err := os.Mkdir(localPath, 0o755)
+					return operationDoneMsg{message: "Created local directory: " + localPath, err: err, refreshLocal: true}
+				}
+				err := app.client.Mkdir(remotePath)
+				return operationDoneMsg{message: "Created server directory: " + remotePath, err: err, refreshRemote: true}
+			}
+		},
+	}
+	return nil
+}
+
+func localDirectoryTarget(baseDir, value string) string {
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	return filepath.Join(baseDir, value)
+}
+
+func remoteDirectoryTarget(baseDir, value string) string {
+	return sftpclient.JoinRemote(baseDir, value)
+}
+
 func (a *App) uploadSelected() tea.Cmd {
 	items := a.local.selectedItems()
 	if len(items) == 0 {
@@ -1121,7 +1166,7 @@ func (a *App) browserView() string {
 	left := renderPane(a.local, a.active == paneLocal, paneWidth, paneHeight)
 	right := renderPane(a.remote, a.active == paneRemote, paneWidth, paneHeight)
 	lines := make([]string, 0, paneHeight+5)
-	lines = append(lines, "SFTP TUI  tab switch | enter open | space select | u upload | d download | / search | g goto | n rename | x delete | r refresh | q quit")
+	lines = append(lines, "SFTP TUI  tab switch | enter open | space select | u upload | d download | m mkdir | / search | g goto | n rename | x delete | r refresh | q quit")
 	for i := 0; i < len(left) || i < len(right); i++ {
 		l, r := "", ""
 		if i < len(left) {

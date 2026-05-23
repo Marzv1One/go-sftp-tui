@@ -73,3 +73,73 @@ func TestPasteTextPrompt(t *testing.T) {
 		t.Fatalf("prompt value = %q", got)
 	}
 }
+
+func TestPromptMakeDirectoryOpensLocalPrompt(t *testing.T) {
+	app := New()
+	app.active = paneLocal
+	cmd := app.promptMakeDirectory()
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if app.screen != screenPrompt {
+		t.Fatalf("screen = %v want prompt", app.screen)
+	}
+	if app.prompt.title != "Create local directory" {
+		t.Fatalf("prompt title = %q", app.prompt.title)
+	}
+	if app.prompt.label != "directory name or path" {
+		t.Fatalf("prompt label = %q", app.prompt.label)
+	}
+}
+
+func TestPromptMakeDirectoryOpensRemotePrompt(t *testing.T) {
+	app := New()
+	app.active = paneRemote
+	cmd := app.promptMakeDirectory()
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if app.screen != screenPrompt {
+		t.Fatalf("screen = %v want prompt", app.screen)
+	}
+	if app.prompt.title != "Create server directory" {
+		t.Fatalf("prompt title = %q", app.prompt.title)
+	}
+	if app.prompt.label != "directory name or path" {
+		t.Fatalf("prompt label = %q", app.prompt.label)
+	}
+}
+
+func TestPromptMakeDirectoryCreatesLocalDirectory(t *testing.T) {
+	localDir := t.TempDir()
+	app := New()
+	app.active = paneLocal
+	app.local.path = localDir
+	_ = app.promptMakeDirectory()
+	cmd := app.prompt.done(app, "downloads")
+	if cmd == nil {
+		t.Fatal("expected create directory command")
+	}
+	msg := cmd().(operationDoneMsg)
+	if msg.err != nil {
+		t.Fatalf("create local directory: %v", msg.err)
+	}
+	if !msg.refreshLocal {
+		t.Fatal("expected local refresh")
+	}
+	if _, err := os.Stat(filepath.Join(localDir, "downloads")); err != nil {
+		t.Fatalf("stat created directory: %v", err)
+	}
+}
+
+func TestDirectoryTargets(t *testing.T) {
+	if got := localDirectoryTarget(filepath.Join("C:", "work"), "downloads"); got != filepath.Join("C:", "work", "downloads") {
+		t.Fatalf("relative local directory = %q", got)
+	}
+	if got := remoteDirectoryTarget("/home/user", "new-dir"); got != "/home/user/new-dir" {
+		t.Fatalf("relative remote directory = %q", got)
+	}
+	if got := remoteDirectoryTarget("/home/user", "/var/tmp/new-dir"); got != "/var/tmp/new-dir" {
+		t.Fatalf("absolute remote directory = %q", got)
+	}
+}
