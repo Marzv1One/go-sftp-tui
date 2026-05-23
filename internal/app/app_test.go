@@ -18,3 +18,22 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+func TestPasteTextConnectForm(t *testing.T) {
+	app := New()
+	app.connect.active = connectPassword
+	app.pasteText("secret\r\n")
+	if got := app.connect.values[connectPassword]; got != "secret" {
+		t.Fatalf("pasted password = %q", got)
+	}
+}
+
+func TestPasteTextPrompt(t *testing.T) {
+	app := New()
+	app.screen = screenPrompt
+	app.prompt.value = "base"
+	app.pasteText("-suffix")
+	if got := app.prompt.value; got != "base-suffix" {
+		t.Fatalf("prompt value = %q", got)
+	}
+}

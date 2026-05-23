@@ -177,6 +177,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.height = msg.Height
 	case tea.KeyPressMsg:
 		return a.handleKey(msg)
+	case tea.PasteMsg:
+		a.pasteText(msg.Content)
+	case tea.ClipboardMsg:
+		a.pasteText(msg.Content)
 	case connectedMsg:
 		a.busy = false
 		if msg.err != nil {
@@ -242,6 +246,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return a, tea.Quit
+	}
+	if (msg.String() == "ctrl+shift+v" || msg.String() == "ctrl+v") && (a.screen == screenConnect || a.screen == screenPrompt) {
+		return a, func() tea.Msg { return tea.ReadClipboard() }
 	}
 	if a.busy {
 		return a, nil
@@ -361,6 +368,22 @@ func (a *App) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (a *App) pasteText(content string) {
+	content = strings.TrimRight(content, "\r\n")
+	if content == "" {
+		return
+	}
+	switch a.screen {
+	case screenConnect:
+		if a.connect.active < connectAction {
+			a.connect.values[a.connect.active] += content
+			a.status = "Pasted into " + a.connect.labels[a.connect.active] + "."
+		}
+	case screenPrompt:
+		a.prompt.value += content
+	}
 }
 
 func (a *App) handleConfirmKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -1042,7 +1065,7 @@ func (a *App) connectView() string {
 		b.WriteString(fmt.Sprintf("%s%-18s %s\n", prefix, label+":", value))
 	}
 	b.WriteString("\nSecret name + vault passphrase loads an age-encrypted credential.\n")
-	b.WriteString("Tab/down moves, enter activates, q quits.\n")
+	b.WriteString("Tab/down moves, Ctrl+Shift+V pastes, enter activates, q quits.\n")
 	b.WriteString("Vault: " + credentials.DefaultVaultPath() + "\n")
 	b.WriteString("\n" + a.status)
 	return b.String()

@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -33,11 +34,11 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 15 * time.Second
 	}
-	port := cfg.Port
-	if port == "" {
-		port = "22"
-	}
-	address := netJoinHostPort(cfg.Host, port)
+	host, port := normalizeEndpoint(cfg.Host, cfg.Port)
+	cfg.Host = host
+	cfg.Port = port
+	cfg.Username = cleanTextField(cfg.Username)
+	address := netJoinHostPort(cfg.Host, cfg.Port)
 	client, err := dialSSH(ctx, address, cfg)
 	if err != nil {
 		return nil, err
@@ -208,13 +209,46 @@ func signerFromKey(keyBytes []byte, passphrase string) (ssh.Signer, error) {
 }
 
 func netJoinHostPort(host, port string) string {
-	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
-		return "[" + host + "]:" + port
+	host, port = normalizeEndpoint(host, port)
+	return net.JoinHostPort(host, port)
+}
+
+func normalizeEndpoint(host, port string) (string, string) {
+	host = cleanTextField(host)
+	port = cleanTextField(port)
+	if strings.Contains(host, "://") {
+		parts := strings.SplitN(host, "://", 2)
+		host = parts[1]
 	}
-	if _, err := strconv.Atoi(port); err == nil {
-		return host + ":" + port
+	if splitHost, splitPort, err := net.SplitHostPort(host); err == nil {
+		host = splitHost
+		if port == "" || port == "22" {
+			port = splitPort
+		}
+	} else if strings.Count(host, ":") == 1 {
+		left, right, ok := strings.Cut(host, ":")
+		if ok && right != "" {
+			host = left
+			if port == "" || port == "22" {
+				port = right
+			}
+		}
 	}
-	return host + ":" + port
+	if port == "" {
+		port = "22"
+	}
+	return strings.Trim(host, "[]"), port
+}
+
+func cleanTextField(value string) string {
+	value = strings.ReplaceAll(value, "\x1b[200~", "")
+	value = strings.ReplaceAll(value, "\x1b[201~", "")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.IsSpace(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 func JoinRemote(baseDir, name string) string {

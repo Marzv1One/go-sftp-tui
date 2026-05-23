@@ -37,3 +37,22 @@ func TestParent(t *testing.T) {
 		}
 	}
 }
+
+func TestNetJoinHostPort(t *testing.T) {
+	cases := []struct {
+		host string
+		port string
+		exp  string
+	}{
+		{host: "172.27.110.56", port: "2222", exp: "172.27.110.56:2222"},
+		{host: " 172.27.110.56 ", port: " 2222 ", exp: "172.27.110.56:2222"},
+		{host: "172.27.110.56:2222", port: "", exp: "172.27.110.56:2222"},
+		{host: "\x1b[200~172.27.110.56\x1b[201~", port: "2222\r\n", exp: "172.27.110.56:2222"},
+		{host: "2001:db8::1", port: "22", exp: "[2001:db8::1]:22"},
+	}
+	for _, tc := range cases {
+		if got := netJoinHostPort(tc.host, tc.port); got != tc.exp {
+			t.Fatalf("netJoinHostPort(%q, %q) = %q want %q", tc.host, tc.port, got, tc.exp)
+		}
+	}
+}
