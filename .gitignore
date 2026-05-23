@@ -1,0 +1,6 @@
+.crush/
+*.exe
+*.test
+*.out
+bin/
+pcaTEST*_TOKEN.txt
