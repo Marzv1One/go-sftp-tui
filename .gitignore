@@ -2,5 +2,8 @@
 *.exe
 *.test
 *.out
+.bash_logout
 bin/
+credentials.age
+.sftp-tui/
 pcaTEST*_TOKEN.txt

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"sftp-tui/internal/credentials"
 	"sftp-tui/internal/sftpclient"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,9 +35,23 @@ const (
 	paneRemote
 )
 
+const (
+	connectSecretName = iota
+	connectHost
+	connectPort
+	connectUsername
+	connectPassword
+	connectPrivateKey
+	connectPassphrase
+	connectVaultPassphrase
+	connectAction
+	connectSaveAction
+)
+
 type App struct {
 	client *sftpclient.Client
 	config sftpclient.Config
+	vault  credentials.Store
 
 	screen screen
 	width  int
@@ -129,9 +144,10 @@ func New() *App {
 		screen: screenConnect,
 		status: "Fill connection settings and press enter on Connect.",
 		connect: connectForm{
-			labels: []string{"Host", "Port", "Username", "Password", "Private key", "Passphrase", "Connect"},
-			values: []string{"", "22", "", "", "", "", ""},
+			labels: []string{"Secret name", "Host", "Port", "Username", "Password", "Private key", "Passphrase", "Vault passphrase", "Connect", "Save secret"},
+			values: []string{"", "", "22", "", "", "", "", "", "", ""},
 		},
+		vault: credentials.AgeVault{Path: credentials.DefaultVaultPath()},
 		local: filePane{
 			title:    "Local",
 			path:     cwd,
@@ -255,14 +271,17 @@ func (a *App) handleConnectKey(msg tea.KeyPressMsg) tea.Cmd {
 			a.connect.active = len(a.connect.labels) - 1
 		}
 	case "enter":
-		if a.connect.active == len(a.connect.labels)-1 {
+		if a.connect.active == connectAction {
 			return a.connectCmd()
+		}
+		if a.connect.active == connectSaveAction {
+			return a.saveSecretCmd()
 		}
 		a.connect.active = (a.connect.active + 1) % len(a.connect.labels)
 	case "backspace":
 		a.trimConnectField()
 	default:
-		if msg.Text != "" && a.connect.active < len(a.connect.values)-1 {
+		if msg.Text != "" && a.connect.active < connectAction {
 			a.connect.values[a.connect.active] += msg.Text
 		}
 	}
@@ -380,22 +399,28 @@ func (a *App) View() tea.View {
 }
 
 func (a *App) connectCmd() tea.Cmd {
-	cfg := sftpclient.Config{
-		Host:       strings.TrimSpace(a.connect.values[0]),
-		Port:       strings.TrimSpace(a.connect.values[1]),
-		Username:   strings.TrimSpace(a.connect.values[2]),
-		Password:   a.connect.values[3],
-		PrivateKey: strings.TrimSpace(a.connect.values[4]),
-		Passphrase: a.connect.values[5],
-		Timeout:    15 * time.Second,
+	typedCfg := a.formConfig()
+	secretName := strings.TrimSpace(a.connect.values[connectSecretName])
+	vaultPassphrase := a.connect.values[connectVaultPassphrase]
+	if secretName == "" && (typedCfg.Host == "" || typedCfg.Username == "") {
+		a.status = "Host and username are required, or provide a secret name."
+		return nil
 	}
-	if cfg.Host == "" || cfg.Username == "" {
-		a.status = "Host and username are required."
+	if secretName != "" && vaultPassphrase == "" {
+		a.status = "Vault passphrase is required to load a secret."
 		return nil
 	}
 	a.busy = true
 	a.status = "Connecting..."
 	return func() tea.Msg {
+		cfg := typedCfg
+		if secretName != "" {
+			entry, err := a.vault.Get(vaultPassphrase, secretName)
+			if err != nil {
+				return connectedMsg{cfg: cfg, err: err}
+			}
+			cfg = credentials.MergeConfig(entry.Config(), typedCfg)
+		}
 		client, err := sftpclient.Connect(context.Background(), cfg)
 		if err != nil {
 			return connectedMsg{client: client, cfg: cfg, err: err}
@@ -406,6 +431,43 @@ func (a *App) connectCmd() tea.Cmd {
 			return connectedMsg{cfg: cfg, err: err}
 		}
 		return connectedMsg{client: client, cfg: cfg, cwd: cwd, err: nil}
+	}
+}
+
+func (a *App) saveSecretCmd() tea.Cmd {
+	secretName := strings.TrimSpace(a.connect.values[connectSecretName])
+	vaultPassphrase := a.connect.values[connectVaultPassphrase]
+	cfg := a.formConfig()
+	if secretName == "" {
+		a.status = "Secret name is required."
+		return nil
+	}
+	if vaultPassphrase == "" {
+		a.status = "Vault passphrase is required."
+		return nil
+	}
+	if cfg.Host == "" || cfg.Username == "" {
+		a.status = "Host and username are required to save a secret."
+		return nil
+	}
+	a.busy = true
+	a.status = "Saving secret..."
+	return func() tea.Msg {
+		entry := credentials.EntryFromConfig(cfg)
+		err := a.vault.Save(vaultPassphrase, secretName, entry)
+		return operationDoneMsg{message: "Secret saved to age vault.", err: err}
+	}
+}
+
+func (a *App) formConfig() sftpclient.Config {
+	return sftpclient.Config{
+		Host:       strings.TrimSpace(a.connect.values[connectHost]),
+		Port:       strings.TrimSpace(a.connect.values[connectPort]),
+		Username:   strings.TrimSpace(a.connect.values[connectUsername]),
+		Password:   a.connect.values[connectPassword],
+		PrivateKey: strings.TrimSpace(a.connect.values[connectPrivateKey]),
+		Passphrase: a.connect.values[connectPassphrase],
+		Timeout:    15 * time.Second,
 	}
 }
 
@@ -969,17 +1031,19 @@ func (a *App) connectView() string {
 		if i == a.connect.active {
 			prefix = "> "
 		}
-		if label == "Connect" {
-			b.WriteString(prefix + "[ Connect ]\n")
+		if i == connectAction || i == connectSaveAction {
+			b.WriteString(prefix + "[ " + label + " ]\n")
 			continue
 		}
 		value := a.connect.values[i]
-		if label == "Password" || label == "Passphrase" {
+		if i == connectPassword || i == connectPassphrase || i == connectVaultPassphrase {
 			value = strings.Repeat("*", utf8.RuneCountInString(value))
 		}
-		b.WriteString(fmt.Sprintf("%s%-12s %s\n", prefix, label+":", value))
+		b.WriteString(fmt.Sprintf("%s%-18s %s\n", prefix, label+":", value))
 	}
-	b.WriteString("\nTab/down moves, enter connects, q quits.\n")
+	b.WriteString("\nSecret name + vault passphrase loads an age-encrypted credential.\n")
+	b.WriteString("Tab/down moves, enter activates, q quits.\n")
+	b.WriteString("Vault: " + credentials.DefaultVaultPath() + "\n")
 	b.WriteString("\n" + a.status)
 	return b.String()
 }
@@ -1074,7 +1138,7 @@ func (a *App) confirmView() string {
 }
 
 func (a *App) trimConnectField() {
-	if a.connect.active >= len(a.connect.values)-1 {
+	if a.connect.active >= connectAction {
 		return
 	}
 	a.connect.values[a.connect.active] = trimLastRune(a.connect.values[a.connect.active])

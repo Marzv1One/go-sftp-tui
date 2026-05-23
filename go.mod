@@ -4,11 +4,13 @@ go 1.25.0
 
 require (
 	charm.land/bubbletea/v2 v2.0.0-beta.2
+	filippo.io/age v1.3.1
 	github.com/pkg/sftp v1.13.7
-	golang.org/x/crypto v0.32.0
+	golang.org/x/crypto v0.45.0
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260416155717-489999b90468 // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect
