@@ -19,6 +19,13 @@ func TestHumanSize(t *testing.T) {
 	}
 }
 
+func TestNewConnectFormLeavesPortEmpty(t *testing.T) {
+	app := New()
+	if got := app.connect.values[connectPort]; got != "" {
+		t.Fatalf("default port = %q want empty", got)
+	}
+}
+
 func TestPasteTextConnectForm(t *testing.T) {
 	app := New()
 	app.connect.active = connectPassword

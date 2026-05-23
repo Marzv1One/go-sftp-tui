@@ -38,9 +38,18 @@ func TestAgeVaultSaveGetList(t *testing.T) {
 
 func TestMergeConfigPrefersTypedValues(t *testing.T) {
 	stored := sftpclient.Config{Host: "stored", Port: "22", Username: "stored-user", Password: "stored-pass"}
+	typed := sftpclient.Config{Host: "typed", Port: "2222", Username: "typed-user"}
+	got := MergeConfig(stored, typed)
+	if got.Host != "typed" || got.Username != "typed-user" || got.Password != "stored-pass" || got.Port != "2222" {
+		t.Fatalf("merged config = %#v", got)
+	}
+}
+
+func TestMergeConfigKeepsStoredPortWhenTypedPortEmpty(t *testing.T) {
+	stored := sftpclient.Config{Host: "stored", Port: "2222", Username: "stored-user", Password: "stored-pass"}
 	typed := sftpclient.Config{Host: "typed", Username: "typed-user"}
 	got := MergeConfig(stored, typed)
-	if got.Host != "typed" || got.Username != "typed-user" || got.Password != "stored-pass" || got.Port != "22" {
-		t.Fatalf("merged config = %#v", got)
+	if got.Port != "2222" {
+		t.Fatalf("merged port = %q want %q", got.Port, "2222")
 	}
 }

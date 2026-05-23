@@ -145,7 +145,7 @@ func New() *App {
 		status: "Fill connection settings and press enter on Connect.",
 		connect: connectForm{
 			labels: []string{"Secret name", "Host", "Port", "Username", "Password", "Private key", "Passphrase", "Vault passphrase", "Connect", "Save secret"},
-			values: []string{"", "", "22", "", "", "", "", "", "", ""},
+			values: []string{"", "", "", "", "", "", "", "", "", ""},
 		},
 		vault: credentials.AgeVault{Path: credentials.DefaultVaultPath()},
 		local: filePane{
@@ -1064,7 +1064,7 @@ func (a *App) connectView() string {
 		}
 		b.WriteString(fmt.Sprintf("%s%-18s %s\n", prefix, label+":", value))
 	}
-	b.WriteString("\nSecret name + vault passphrase loads an age-encrypted credential.\n")
+	b.WriteString("\nSecret name + vault passphrase loads an age-encrypted credential. Empty port uses saved/default 22.\n")
 	b.WriteString("Tab/down moves, Ctrl+Shift+V pastes, enter activates, q quits.\n")
 	b.WriteString("Vault: " + credentials.DefaultVaultPath() + "\n")
 	b.WriteString("\n" + a.status)
