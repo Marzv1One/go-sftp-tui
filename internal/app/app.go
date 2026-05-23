@@ -135,10 +135,22 @@ type operationDoneMsg struct {
 	refreshRemote bool
 }
 
+type Options struct {
+	LocalCWD string
+}
+
 func New() *App {
-	cwd, err := os.Getwd()
+	app, err := NewWithOptions(Options{})
 	if err != nil {
-		cwd = "."
+		app, _ = NewWithOptions(Options{LocalCWD: "."})
+	}
+	return app
+}
+
+func NewWithOptions(options Options) (*App, error) {
+	cwd, err := initialLocalPath(options.LocalCWD)
+	if err != nil {
+		return nil, err
 	}
 	return &App{
 		screen: screenConnect,
@@ -158,7 +170,29 @@ func New() *App {
 			path:     "/",
 			selected: map[string]bool{},
 		},
+	}, nil
+}
+
+func initialLocalPath(localCWD string) (string, error) {
+	if strings.TrimSpace(localCWD) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return ".", nil
+		}
+		return cwd, nil
 	}
+	abs, err := filepath.Abs(localCWD)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("local cwd is not a directory: %s", abs)
+	}
+	return abs, nil
 }
 
 func (a *App) Run() error {

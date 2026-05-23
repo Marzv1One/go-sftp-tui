@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestHumanSize(t *testing.T) {
 	cases := []struct {
@@ -23,6 +27,31 @@ func TestNewConnectFormLeavesPortEmpty(t *testing.T) {
 	app := New()
 	if got := app.connect.values[connectPort]; got != "" {
 		t.Fatalf("default port = %q want empty", got)
+	}
+}
+
+func TestNewWithOptionsUsesLocalCWD(t *testing.T) {
+	localCWD := t.TempDir()
+	app, err := NewWithOptions(Options{LocalCWD: localCWD})
+	if err != nil {
+		t.Fatalf("new app with local cwd: %v", err)
+	}
+	expected, err := filepath.Abs(localCWD)
+	if err != nil {
+		t.Fatalf("abs local cwd: %v", err)
+	}
+	if app.local.path != expected {
+		t.Fatalf("local path = %q want %q", app.local.path, expected)
+	}
+}
+
+func TestNewWithOptionsRejectsFileLocalCWD(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+	if _, err := NewWithOptions(Options{LocalCWD: filePath}); err == nil {
+		t.Fatal("expected file local cwd to fail")
 	}
 }
 
