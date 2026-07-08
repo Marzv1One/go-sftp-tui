@@ -407,6 +407,7 @@ func (a *App) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (a *App) pasteText(content string) {
+	content = strings.ReplaceAll(content, "\x00", "")
 	content = strings.TrimRight(content, "\r\n")
 	if content == "" {
 		return
