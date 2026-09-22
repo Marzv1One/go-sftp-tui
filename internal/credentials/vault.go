@@ -19,6 +19,7 @@ import (
 type Store interface {
 	Get(passphrase, name string) (Entry, error)
 	Save(passphrase, name string, entry Entry) error
+	Delete(passphrase, name string) error
 	List(passphrase string) ([]string, error)
 }
 
@@ -71,6 +72,22 @@ func (v AgeVault) Save(passphrase, name string, entry Entry) error {
 	}
 	entry.UpdatedAt = time.Now().UTC()
 	entries[name] = entry
+	return v.save(passphrase, entries)
+}
+
+func (v AgeVault) Delete(passphrase, name string) error {
+	name = normalizeName(name)
+	if name == "" {
+		return errors.New("credential name is required")
+	}
+	entries, err := v.load(passphrase)
+	if err != nil {
+		return err
+	}
+	if _, ok := entries[name]; !ok {
+		return fmt.Errorf("credential %q not found", name)
+	}
+	delete(entries, name)
 	return v.save(passphrase, entries)
 }
 
