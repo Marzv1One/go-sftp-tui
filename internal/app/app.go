@@ -17,6 +17,8 @@ import (
 	"sftp-tui/internal/sftpclient"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type screen int
@@ -26,6 +28,7 @@ const (
 	screenBrowser
 	screenPrompt
 	screenConfirm
+	screenCredentials
 )
 
 type paneKind int
@@ -64,8 +67,11 @@ type App struct {
 	remote  filePane
 	active  paneKind
 
-	prompt  promptState
-	confirm confirmState
+	prompt        promptState
+	confirm       confirmState
+	profiles      []string
+	profileQuery  string
+	profileCursor int
 }
 
 type connectForm struct {
@@ -92,17 +98,94 @@ type fileItem struct {
 }
 
 type promptState struct {
-	title  string
-	label  string
-	value  string
-	done   func(*App, string) tea.Cmd
-	cancel func(*App) tea.Cmd
+	choices      []string
+	choiceCursor int
+	masked       bool
+	title        string
+	label        string
+	value        string
+	done         func(*App, string) tea.Cmd
+	cancel       func(*App) tea.Cmd
 }
 
 type confirmState struct {
 	message string
 	yes     func(*App) tea.Cmd
 	no      func(*App) tea.Cmd
+}
+
+type profilesLoadedMsg struct {
+	names []string
+	err   error
+}
+
+func (a *App) browseCredentials() tea.Cmd {
+	passphrase := a.connect.values[connectVaultPassphrase]
+	if passphrase == "" {
+		a.screen = screenPrompt
+		a.prompt = promptState{title: "Unlock credential vault", label: "Vault passphrase", masked: true,
+			done: func(app *App, value string) tea.Cmd {
+				app.screen = screenConnect
+				app.connect.values[connectVaultPassphrase] = value
+				if value == "" {
+					app.status = "Vault passphrase is required."
+					return nil
+				}
+				return app.browseCredentials()
+			},
+			cancel: func(app *App) tea.Cmd { app.screen = screenConnect; return nil },
+		}
+		return nil
+	}
+	a.busy = true
+	a.status = "Unlocking vault..."
+	store := a.vault
+	return func() tea.Msg { names, err := store.List(passphrase); return profilesLoadedMsg{names: names, err: err} }
+}
+
+func (a *App) handleCredentialKey(msg tea.KeyPressMsg) tea.Cmd {
+	matches := matchingChoices(a.profiles, a.profileQuery)
+	switch msg.String() {
+	case "esc":
+		a.screen = screenConnect
+		a.profiles = nil
+	case "up", "shift+tab":
+		a.profileCursor = max(0, a.profileCursor-1)
+	case "down", "tab":
+		a.profileCursor = min(max(0, len(matches)-1), a.profileCursor+1)
+	case "enter":
+		if len(matches) > 0 {
+			a.connect.values[connectSecretName] = matches[a.profileCursor]
+			a.connect.active = connectAction
+			a.screen = screenConnect
+			a.profiles = nil
+			a.status = "Profile selected. Typed fields override saved values; Enter connects."
+		}
+	case "backspace":
+		a.profileQuery = trimLastRune(a.profileQuery)
+		a.profileCursor = 0
+	default:
+		if msg.Text != "" {
+			a.profileQuery += msg.Text
+			a.profileCursor = 0
+		}
+	}
+	return nil
+}
+
+func (a *App) credentialView() string {
+	width := 68
+	if a.width > 0 {
+		width = min(width, max(4, a.width-2))
+	}
+	rows := 8
+	if a.height > 0 {
+		rows = max(1, min(rows, a.height-9))
+	}
+	content := accentStyle.Render("Saved connections") + "\n" + mutedStyle.Render("Type to filter profiles") + "\n" + truncate("> "+displayText(a.profileQuery)+"_", width) + "\n\n"
+	content += choiceView(matchingChoices(a.profiles, a.profileQuery), a.profileCursor, rows, width)
+	content += "\n" + mutedStyle.Render("Up/down select | Enter use | Esc back")
+	return panel(content, width, true)
 }
 
 type connectedMsg struct {
@@ -215,6 +298,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.pasteText(msg.Content)
 	case tea.ClipboardMsg:
 		a.pasteText(msg.Content)
+	case profilesLoadedMsg:
+		a.busy = false
+		if msg.err != nil {
+			a.status = msg.err.Error()
+			a.screen = screenConnect
+			return a, nil
+		}
+		a.profiles = msg.names
+		a.profileQuery = ""
+		a.profileCursor = 0
+		if len(msg.names) == 0 {
+			a.status = "No saved profiles. Fill connection settings and choose Save secret."
+			a.screen = screenConnect
+			return a, nil
+		}
+		a.screen = screenCredentials
 	case connectedMsg:
 		a.busy = false
 		if msg.err != nil {
@@ -288,6 +387,8 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	switch a.screen {
+	case screenCredentials:
+		return a, a.handleCredentialKey(msg)
 	case screenConnect:
 		return a, a.handleConnectKey(msg)
 	case screenPrompt:
@@ -302,7 +403,9 @@ func (a *App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleConnectKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
-	case "q", "esc":
+	case "ctrl+l":
+		return a.browseCredentials()
+	case "esc":
 		return tea.Quit
 	case "tab", "down":
 		a.connect.active = (a.connect.active + 1) % len(a.connect.labels)
@@ -312,6 +415,9 @@ func (a *App) handleConnectKey(msg tea.KeyPressMsg) tea.Cmd {
 			a.connect.active = len(a.connect.labels) - 1
 		}
 	case "enter":
+		if a.connect.active == connectSecretName {
+			return a.browseCredentials()
+		}
 		if a.connect.active == connectAction {
 			return a.connectCmd()
 		}
@@ -394,13 +500,34 @@ func (a *App) handlePromptKey(msg tea.KeyPressMsg) tea.Cmd {
 		value := a.prompt.value
 		a.screen = screenBrowser
 		if done != nil {
+			if a.prompt.masked {
+				return done(a, value)
+			}
 			return done(a, strings.TrimSpace(value))
 		}
+	case "up", "down", "shift+tab":
+		matches := matchingChoices(a.prompt.choices, a.prompt.value)
+		delta := 1
+		if msg.String() != "down" {
+			delta = -1
+		}
+		a.prompt.choiceCursor = max(0, min(len(matches)-1, a.prompt.choiceCursor+delta))
+	case "tab":
+		matches := matchingChoices(a.prompt.choices, a.prompt.value)
+		if len(matches) > 0 {
+			a.prompt.value = matches[min(a.prompt.choiceCursor, len(matches)-1)]
+			a.prompt.choiceCursor = 0
+		}
+	case "ctrl+u":
+		a.prompt.value = ""
+		a.prompt.choiceCursor = 0
 	case "backspace":
 		a.prompt.value = trimLastRune(a.prompt.value)
+		a.prompt.choiceCursor = 0
 	default:
 		if msg.Text != "" {
 			a.prompt.value += msg.Text
+			a.prompt.choiceCursor = 0
 		}
 	}
 	return nil
@@ -420,6 +547,7 @@ func (a *App) pasteText(content string) {
 		}
 	case screenPrompt:
 		a.prompt.value += content
+		a.prompt.choiceCursor = 0
 	}
 }
 
@@ -446,10 +574,12 @@ func (a *App) View() tea.View {
 	switch a.screen {
 	case screenConnect:
 		content = a.connectView()
+	case screenCredentials:
+		content = a.credentialView()
 	case screenPrompt:
-		content = a.browserView() + "\n" + a.promptView()
+		content = a.promptView()
 	case screenConfirm:
-		content = a.browserView() + "\n" + a.confirmView()
+		content = a.confirmView()
 	default:
 		content = a.browserView()
 	}
@@ -728,9 +858,10 @@ func (a *App) promptSearch() tea.Cmd {
 	pane := a.activePane()
 	a.screen = screenPrompt
 	a.prompt = promptState{
-		title: "Search " + pane.title,
-		label: "name contains",
-		value: pane.searchQuery,
+		title:   "Search " + pane.title,
+		label:   "name contains",
+		value:   pane.searchQuery,
+		choices: paneChoices(pane, false),
 		done: func(app *App, value string) tea.Cmd {
 			app.busy = true
 			if app.active == paneLocal {
@@ -746,9 +877,10 @@ func (a *App) promptGoTo() tea.Cmd {
 	pane := a.activePane()
 	a.screen = screenPrompt
 	a.prompt = promptState{
-		title: "Go to " + pane.title,
-		label: "path",
-		value: pane.path,
+		title:   "Go to " + pane.title,
+		label:   "path",
+		value:   pane.path,
+		choices: paneChoices(pane, true),
 		done: func(app *App, value string) tea.Cmd {
 			if value == "" {
 				return nil
@@ -1128,62 +1260,76 @@ func (p *filePane) selectedItems() []fileItem {
 
 func (a *App) connectView() string {
 	var b strings.Builder
-	b.WriteString("SFTP TUI\n\n")
+	b.WriteString(accentStyle.Render("SFTP / CONNECT") + "\n")
+	b.WriteString(mutedStyle.Render("Encrypted profiles. Secure transfers.") + "\n\n")
 	for i, label := range a.connect.labels {
 		prefix := "  "
 		if i == a.connect.active {
 			prefix = "> "
 		}
 		if i == connectAction || i == connectSaveAction {
-			b.WriteString(prefix + "[ " + label + " ]\n")
+			line := prefix + "[ " + label + " ]"
+			if i == a.connect.active {
+				line = selectedStyle.Render(line)
+			} else {
+				line = accentStyle.Render(line)
+			}
+			b.WriteString(line + "\n")
 			continue
 		}
 		value := a.connect.values[i]
 		if i == connectPassword || i == connectPassphrase || i == connectVaultPassphrase {
 			value = strings.Repeat("*", utf8.RuneCountInString(value))
 		}
-		b.WriteString(fmt.Sprintf("%s%-18s %s\n", prefix, label+":", value))
+		if value == "" {
+			value = "..."
+		}
+		if i == connectSecretName {
+			value += "  [Enter to browse]"
+		}
+		line := fmt.Sprintf("%s%-18s %s", prefix, label+":", displayText(value))
+		if i == a.connect.active {
+			line = selectedStyle.Render(line)
+		}
+		b.WriteString(line + "\n")
 	}
-	b.WriteString("\nSecret name + vault passphrase loads an age-encrypted credential. Empty port uses saved/default 22.\n")
-	b.WriteString("Tab/down moves, Ctrl+Shift+V pastes, enter activates, q quits.\n")
-	b.WriteString("Vault: " + credentials.DefaultVaultPath() + "\n")
-	b.WriteString("\n" + a.status)
-	return b.String()
+	b.WriteString("\n" + mutedStyle.Render("Ctrl+L browse saved profiles | Tab move | Enter activate") + "\n")
+	b.WriteString(mutedStyle.Render("Ctrl+V paste | Esc quit | Empty port uses saved/default 22") + "\n")
+	status := displayText(a.status)
+	if a.busy {
+		status = "Working... " + status
+	}
+	b.WriteString("\n" + status)
+	width := 76
+	if a.width > 0 {
+		width = min(width, max(4, a.width))
+	}
+	return panel(b.String(), width, true)
 }
 
 func (a *App) browserView() string {
-	width := a.width
+	width, height := a.width, a.height
 	if width <= 0 {
 		width = 100
 	}
-	paneWidth := (width - 3) / 2
-	if paneWidth < 30 {
-		paneWidth = 30
+	if height <= 0 {
+		height = 28
 	}
-	paneHeight := a.height - 6
-	if paneHeight < 8 {
-		paneHeight = 14
-	}
-	left := renderPane(a.local, a.active == paneLocal, paneWidth, paneHeight)
-	right := renderPane(a.remote, a.active == paneRemote, paneWidth, paneHeight)
-	lines := make([]string, 0, paneHeight+5)
-	lines = append(lines, "SFTP TUI  tab switch | enter open | space select | u upload | d download | m mkdir | / search | g goto | n rename | x delete | r refresh | q quit")
-	for i := 0; i < len(left) || i < len(right); i++ {
-		l, r := "", ""
-		if i < len(left) {
-			l = left[i]
-		}
-		if i < len(right) {
-			r = right[i]
-		}
-		lines = append(lines, padRight(l, paneWidth)+" | "+padRight(r, paneWidth))
-	}
-	if a.busy {
-		lines = append(lines, "Working... "+a.status)
+	rows := max(1, height-9)
+	paneWidth := max(4, (width-1)/2)
+	var body string
+	if width < 80 {
+		body = panel(strings.Join(renderPane(*a.activePane(), true, max(2, width-2), rows), "\n"), width, true)
 	} else {
-		lines = append(lines, a.status)
+		left := panel(strings.Join(renderPane(a.local, a.active == paneLocal, paneWidth-2, rows), "\n"), paneWidth, a.active == paneLocal)
+		right := panel(strings.Join(renderPane(a.remote, a.active == paneRemote, paneWidth-2, rows), "\n"), paneWidth, a.active == paneRemote)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	}
-	return strings.Join(lines, "\n")
+	status := displayText(a.status)
+	if a.busy {
+		status = "Working... " + status
+	}
+	return accentStyle.Render("SFTP / FILE MANAGER") + "\n" + body + "\n" + truncate(status, width) + "\n" + mutedStyle.Render(truncate("Tab pane | Enter open | Space select | u upload | d download", width)) + "\n" + mutedStyle.Render(truncate("/ search | g path | m mkdir | n rename | x delete | r refresh | c disconnect | q quit", width))
 }
 
 func renderPane(p filePane, active bool, width, height int) []string {
@@ -1195,7 +1341,8 @@ func renderPane(p filePane, active bool, width, height int) []string {
 	if p.searchMode {
 		title += " [search: " + p.searchQuery + "]"
 	}
-	lines := []string{truncate(title, width)}
+	lines := []string{accentStyle.Render(truncate(displayText(title), width))}
+	lines = append(lines, mutedStyle.Render(truncate(fmt.Sprintf("%d entries | %d selected", len(p.items), len(p.selectedItems())), width)))
 	start := 0
 	if p.cursor >= height {
 		start = p.cursor - height + 1
@@ -1203,7 +1350,14 @@ func renderPane(p filePane, active bool, width, height int) []string {
 	for row := 0; row < height; row++ {
 		idx := start + row
 		if idx >= len(p.items) {
-			lines = append(lines, "")
+			empty := ""
+			if row == 0 {
+				empty = "No entries"
+				if p.searchMode {
+					empty = "No matches. Esc clears search."
+				}
+			}
+			lines = append(lines, mutedStyle.Render(truncate(empty, width)))
 			continue
 		}
 		item := p.items[idx]
@@ -1227,17 +1381,57 @@ func renderPane(p filePane, active bool, width, height int) []string {
 		if !item.IsDir {
 			size = humanSize(item.Size)
 		}
-		lines = append(lines, truncate(fmt.Sprintf("%s[%s]%s %-40s %9s", cursor, selected, kind, name, size), width))
+		prefix := fmt.Sprintf("%s[%s]%s ", cursor, selected, kind)
+		nameWidth := max(1, width-ansi.StringWidth(prefix)-ansi.StringWidth(size)-1)
+		line := truncate(prefix+padRight(displayText(name), nameWidth)+" "+size, width)
+		if idx == p.cursor && active {
+			line = selectedStyle.Width(width).Render(line)
+		} else if item.IsDir {
+			line = directoryStyle.Render(line)
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }
 
+func paneChoices(pane *filePane, directories bool) []string {
+	choices := []string{}
+	for _, item := range pane.items {
+		if directories {
+			if item.IsDir {
+				choices = append(choices, item.Path)
+			}
+		} else {
+			choices = append(choices, item.Name)
+		}
+	}
+	return choices
+}
+
 func (a *App) promptView() string {
-	return fmt.Sprintf("\n%s\n%s: %s_\nenter confirms, esc cancels", a.prompt.title, a.prompt.label, a.prompt.value)
+	width := 68
+	if a.width > 0 {
+		width = min(width, max(4, a.width-2))
+	}
+	value := displayText(a.prompt.value)
+	if a.prompt.masked {
+		value = strings.Repeat("*", utf8.RuneCountInString(a.prompt.value))
+	}
+	content := accentStyle.Render(displayText(a.prompt.title)) + "\n\n" + displayText(a.prompt.label) + ": " + value + "_\n"
+	if a.prompt.choices != nil {
+		rows := 6
+		if a.height > 0 {
+			rows = max(1, min(rows, a.height-10))
+		}
+		content += choiceView(matchingChoices(a.prompt.choices, a.prompt.value), a.prompt.choiceCursor, rows, width) + "\n"
+		content += mutedStyle.Render("Up/down choose | Tab complete | Ctrl+U clear") + "\n"
+	}
+	content += mutedStyle.Render("Enter confirms | Esc cancels")
+	return panel(content, width, true)
 }
 
 func (a *App) confirmView() string {
-	return "\n" + a.confirm.message
+	return panel(accentStyle.Render("Confirm deletion")+"\n\n"+displayText(a.confirm.message), max(4, min(68, a.width-2)), true)
 }
 
 func (a *App) trimConnectField() {
@@ -1256,23 +1450,15 @@ func trimLastRune(value string) string {
 }
 
 func padRight(value string, width int) string {
-	if len(value) >= width {
-		return truncate(value, width)
-	}
-	return value + strings.Repeat(" ", width-len(value))
+	value = truncate(value, width)
+	return value + strings.Repeat(" ", max(0, width-ansi.StringWidth(value)))
 }
 
 func truncate(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if len(value) <= width {
-		return value
-	}
-	if width <= 1 {
-		return value[:width]
-	}
-	return value[:width-1] + "…"
+	return ansi.Truncate(value, width, "…")
 }
 
 func humanSize(size int64) string {

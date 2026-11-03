@@ -1,0 +1,66 @@
+services:
+  sftpgo:
+    image: drakkan/sftpgo:v2.7.6
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2022:2022"
+      - "127.0.0.1:8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-test}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-test}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+      AWS_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+      AWS_EC2_METADATA_DISABLED: "true"
+      S3_ENDPOINT: "${SFTPGO_S3_ENDPOINT-http://host.docker.internal:4566}"
+      S3_BUCKET: "${SFTPGO_S3_BUCKET:-sftpgo}"
+      S3_KEY_PREFIX: "${SFTPGO_S3_KEY_PREFIX:-}"
+      S3_FORCE_PATH_STYLE: "${SFTPGO_S3_FORCE_PATH_STYLE:-true}"
+      SFTP_USERNAME: "${SFTPGO_USERNAME:-demo}"
+      SFTP_PASSWORD: "${SFTPGO_PASSWORD:-local-sftp-password}"
+      SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN: "true"
+      SFTPGO_DEFAULT_ADMIN_USERNAME: "${SFTPGO_ADMIN_USERNAME:-admin}"
+      SFTPGO_DEFAULT_ADMIN_PASSWORD: "${SFTPGO_ADMIN_PASSWORD:-local-admin-password}"
+      SFTPGO_COMMON__SETSTAT_MODE: "2"
+      SFTPGO_LOADDATA_FROM: /tmp/sftpgo-bootstrap.json
+      SFTPGO_LOADDATA_MODE: "1"
+      SFTPGO_LOADDATA_CLEAN: "true"
+      SFTPGO_GRACE_TIME: "30"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        jq -n '{users: [{
+          username: env.SFTP_USERNAME,
+          password: env.SFTP_PASSWORD,
+          status: 1,
+          home_dir: ("/srv/sftpgo/data/" + env.SFTP_USERNAME),
+          permissions: {"/": ["*"]},
+          filesystem: {
+            provider: 1,
+            s3config: {
+              bucket: env.S3_BUCKET,
+              region: env.AWS_REGION,
+              endpoint: env.S3_ENDPOINT,
+              key_prefix: env.S3_KEY_PREFIX,
+              force_path_style: (env.S3_FORCE_PATH_STYLE == "true")
+            }
+          }
+        }]}' > /tmp/sftpgo-bootstrap.json
+        exec sftpgo serve
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD", "sftpgo", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - sftpgo-home:/var/lib/sftpgo
+      - sftpgo-data:/srv/sftpgo
+
+volumes:
+  sftpgo-home:
+  sftpgo-data:
