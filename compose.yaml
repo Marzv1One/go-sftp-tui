@@ -32,6 +32,9 @@ services:
       - -ec
       - |
         umask 077
+        mkdir -p "/srv/sftpgo/data/$${SFTP_USERNAME:-demo}"
+        chmod 700 "/srv/sftpgo/data/$${SFTP_USERNAME:-demo}" || true
+        chown "$$(id -u):$$(id -g)" "/srv/sftpgo/data/$${SFTP_USERNAME:-demo}" 2>/dev/null || true
         jq -n '{users: [{
           username: env.SFTP_USERNAME,
           password: env.SFTP_PASSWORD,
