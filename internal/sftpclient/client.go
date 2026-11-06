@@ -87,10 +87,16 @@ func (c *Client) Get(remotePath, localPath string) error {
 	if err != nil {
 		return err
 	}
-	defer localFile.Close()
 
-	_, err = io.Copy(localFile, remoteFile)
-	return err
+	_, copyErr := io.Copy(localFile, remoteFile)
+	closeErr := localFile.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return remoteFile.Close()
 }
 
 func (c *Client) Put(localPath, remotePath string) error {
@@ -100,14 +106,17 @@ func (c *Client) Put(localPath, remotePath string) error {
 	}
 	defer localFile.Close()
 
-	remoteFile, err := c.sftpClient.Create(remotePath)
+	remoteFile, err := c.sftpClient.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 	if err != nil {
 		return err
 	}
-	defer remoteFile.Close()
 
-	_, err = io.Copy(remoteFile, localFile)
-	return err
+	_, copyErr := io.Copy(remoteFile, localFile)
+	closeErr := remoteFile.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func (c *Client) Rename(oldPath, newPath string) error {
